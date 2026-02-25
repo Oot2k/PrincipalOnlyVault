@@ -148,3 +148,7 @@ Remove build artifacts:
 ```shell
 forge clean
 ```
+## About
+
+These contracts were developed by SCAS, a smart contract security and research firm focused on DeFi security audits and economic attack modeling.
+We specialize in lending protocols, prediction markets, vault systems, and complex cross-protocol integrations.
