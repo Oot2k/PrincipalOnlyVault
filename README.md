@@ -61,7 +61,7 @@ This keeps prediction market math simple while capturing yield on locked liquidi
                 │
                 ▼
 ┌─────────────────────────────────────────────┐
-│          PrincipalOnlyVault (ERC4626)        │
+│         PrincipalOnlyVault (ERC4626)        │
 │  • Tracks principal deposited               │
 │  • Keeps 5% buffer for withdrawals          │
 │  • Share price locked at 1:1                │
@@ -79,6 +79,8 @@ This keeps prediction market math simple while capturing yield on locked liquidi
                     │  (Protocol rev)  │
                     └──────────────────┘
 ```
+
+Read the [Yield Manager Guide](./YieldManager.md) to learn about protocol assumtions. 
 
 ## Contracts
 

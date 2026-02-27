@@ -44,10 +44,11 @@ contract PrincipalOnlyVault is ERC4626, AccessControl, IPrincipalOnlyVault {
         address initialTreasury,
         IYieldSource initialYieldSource
     ) ERC4626(asset_) ERC20(name_, symbol_) {
-        _grantRole(YIELD_MANAGER_ROLE, _msgSender());
-        _grantRole(DEFAULT_ADMIN_ROLE, _msgSender());
         if (initialTreasury == address(0)) revert TreasuryZeroAddress();
         if (initialTargetBufferBps >= BPS) revert TargetBufferBpsTooHigh();
+
+        _grantRole(YIELD_MANAGER_ROLE, _msgSender());
+        _grantRole(DEFAULT_ADMIN_ROLE, _msgSender());
 
         targetBufferBps = initialTargetBufferBps;
         yieldSource = initialYieldSource;
@@ -138,6 +139,13 @@ contract PrincipalOnlyVault is ERC4626, AccessControl, IPrincipalOnlyVault {
     function claimYield(
         uint256 amount
     ) external checkSolvency onlyRole(YIELD_MANAGER_ROLE) {
+        uint256 claimable = totalAssetsWithYield() - principalDeposited;
+        amount = amount > claimable ? claimable : amount;
+
+        if(amount == 0){
+            revert NoYield();
+        }
+
         _withdrawFromSource(amount);
         SafeERC20.safeTransfer(IERC20(asset()), treasury, amount);
         emit YieldClaimed(amount, treasury);

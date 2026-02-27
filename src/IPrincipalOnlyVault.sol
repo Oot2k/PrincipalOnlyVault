@@ -38,6 +38,8 @@ interface IPrincipalOnlyVault {
     /// @notice Thrown when the vault becomes insolvent.
     error Insolvent();
 
+    /// @notice Thrown when trying to withdraw no yield.
+    error NoYield();
     // ──────────────────────── View functions ────────────────────────
 
     /// @notice Returns the amount of assets held idle in the vault.

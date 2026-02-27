@@ -41,6 +41,12 @@ contract PrincipalOnlyVaultTest is Test {
             IYieldSource(address(yieldSource))
         );
         
+        // Dead deposit to protect against inflation attacks
+        uint256 deadDeposit = 1e18;
+        asset.mint(address(this), deadDeposit);
+        asset.approve(address(vault), deadDeposit);
+        uint256 deadShares = vault.deposit(deadDeposit, address(1)); // Burn shares to dead address
+        
         // Mint initial tokens to test users
         asset.mint(alice, INITIAL_MINT);
         asset.mint(bob, INITIAL_MINT);
@@ -50,19 +56,21 @@ contract PrincipalOnlyVaultTest is Test {
     
     function test_deposit() public {
         uint256 depositAmount = 1000e18;
-        
+        uint256 assetsBefore = vault.totalAssets();
+
         vm.startPrank(alice);
         asset.approve(address(vault), depositAmount);
         uint256 shares = vault.deposit(depositAmount, alice);
         vm.stopPrank();
-        
-        assertEq(shares, depositAmount, "Should mint 1:1 on first deposit");
+
+        assertEq(shares,depositAmount, "Should mint 1:1 on first deposit");
         assertEq(vault.balanceOf(alice), shares, "Alice should have shares");
-        assertEq(vault.principalDeposited(), depositAmount, "Principal tracking");
-        assertEq(vault.totalAssets(), depositAmount, "Total assets equals deposit");
+        assertEq(vault.principalDeposited(),assetsBefore + depositAmount, "Principal tracking");
+        assertEq(vault.totalAssets(),assetsBefore + depositAmount, "Total assets equals deposit");
     }
     
     function test_withdraw() public {
+        uint assetsBefore = vault.totalAssets();
         uint256 depositAmount = 1000e18;
         
         vm.startPrank(alice);
@@ -73,7 +81,7 @@ contract PrincipalOnlyVaultTest is Test {
         vault.withdraw(withdrawAmount, alice, alice);
         vm.stopPrank();
         
-        assertEq(vault.principalDeposited(), depositAmount - withdrawAmount, "Principal reduced");
+        assertEq(vault.principalDeposited(),assetsBefore + depositAmount - withdrawAmount, "Principal reduced");
         assertEq(asset.balanceOf(alice), INITIAL_MINT - depositAmount + withdrawAmount, "Alice got assets back");
     }
     
@@ -94,22 +102,23 @@ contract PrincipalOnlyVaultTest is Test {
     
     function test_rebalance_depositToYield() public {
         uint256 depositAmount = 10_000e18;
-        
+
         // Alice deposits
         vm.startPrank(alice);
         asset.approve(address(vault), depositAmount);
         vault.deposit(depositAmount, alice);
         vm.stopPrank();
-        
+
+        uint256 totalAssets = vault.totalAssets();
         // Target buffer is 5% = 500e18
         // Idle should be 10000e18, so 9500e18 should be deployed
-        uint256 expectedDeployed = depositAmount - (depositAmount * BUFFER_BPS / 10000);
+        uint256 expectedDeployed = totalAssets - (totalAssets * BUFFER_BPS / 10000);
         
         vm.expectEmit(true, true, true, true);
         emit IPrincipalOnlyVault.Rebalanced(0, expectedDeployed);
         vault.rebalance();
         
-        assertApproxEqAbs(vault.idleAssets(), depositAmount * BUFFER_BPS / 10000, 1, "Buffer maintained");
+        assertApproxEqAbs(vault.idleAssets(), totalAssets * BUFFER_BPS / 10000, 1, "Buffer maintained");
         assertGt(yieldSource.maxWithdraw(address(vault)), 0, "Assets deployed to yield source");
     }
     
@@ -151,7 +160,8 @@ contract PrincipalOnlyVaultTest is Test {
     
     function test_withdrawNeverExceedsDeposit_withYield() public {
         uint256 depositAmount = 10_000e18;
-        
+        uint assetsBefore = vault.totalAssets();
+
         // Alice deposits
         vm.startPrank(alice);
         asset.approve(address(vault), depositAmount);
@@ -175,27 +185,28 @@ contract PrincipalOnlyVaultTest is Test {
         
         // Verify yield is still in the system
         uint256 totalWithYield = vault.totalAssetsWithYield();
-        assertEq(totalWithYield, yieldAmount - 1, "Yield remains in vault/source");
+        assertEq(totalWithYield, assetsBefore + yieldAmount - 1, "Yield remains in vault/source");
     }
     
     function test_sharePrice_neverIncreases() public {
         uint256 depositAmount = 10_000e18;
-        
+        uint256 vaultAssetsBefore = vault.totalAssets();
         // Alice deposits
         vm.startPrank(alice);
         asset.approve(address(vault), depositAmount);
         vault.deposit(depositAmount, alice);
         vm.stopPrank();
-        
+
         vault.rebalance();
         
+      
         // Simulate yield
         uint256 yieldAmount = 5_000e18;
         asset.mint(address(yieldSource), yieldAmount);
         
         // totalAssets should still equal principalDeposited (share price unchanged)
-        assertEq(vault.totalAssets(), depositAmount, "Total assets capped at principal");
-        assertLe(vault.totalAssetsWithYield(), depositAmount + yieldAmount, "But yield is tracked separately");
+        assertEq(vault.totalAssets(),depositAmount + vaultAssetsBefore, "Total assets capped at principal");
+        assertLe(vault.totalAssetsWithYield(), depositAmount + vaultAssetsBefore + yieldAmount, "But yield is tracked separately");
         
         // Bob deposits same amount - should get same shares (1:1 ratio preserved)
         vm.startPrank(bob);
@@ -261,11 +272,11 @@ contract PrincipalOnlyVaultTest is Test {
         // Claim 2000 of the yield
         uint256 claimAmount = 2_000e18;
         uint256 treasuryBefore = asset.balanceOf(treasury);
-        
+
         vm.expectEmit(true, true, true, true);
         emit IPrincipalOnlyVault.YieldClaimed(claimAmount, treasury);
         vault.claimYield(claimAmount);
-        
+
         assertEq(asset.balanceOf(treasury), treasuryBefore + claimAmount, "Treasury received yield");
         
         // Vault should still be solvent
@@ -281,12 +292,9 @@ contract PrincipalOnlyVaultTest is Test {
         vm.stopPrank();
         
         vault.rebalance();
-        
-        // Simulate small yield
-        asset.mint(address(yieldSource), 500e18);
-        
-        // Try to claim too much - would make vault insolvent
-        vm.expectRevert(IPrincipalOnlyVault.Insolvent.selector);
+
+        // Try to claim too much - should revert with NoYield
+        vm.expectRevert(IPrincipalOnlyVault.NoYield.selector);
         vault.claimYield(1_000e18);
     }
     
@@ -310,11 +318,8 @@ contract PrincipalOnlyVaultTest is Test {
         
         // Should still be able to claim yield (up to the buffer amount)
         uint256 maxClaimable = vault.totalAssetsWithYield() - vault.principalDeposited();
-        
-        if (maxClaimable > 100e18) {
-            vault.claimYield(100e18);
-            assertEq(asset.balanceOf(treasury), 100e18, "Yield claimed successfully");
-        }
+        vault.claimYield(maxClaimable);
+        assertEq(asset.balanceOf(treasury), maxClaimable, "Yield claimed successfully");
     }
     
     function test_withdrawFromSource_whenIdle_insufficient() public {
